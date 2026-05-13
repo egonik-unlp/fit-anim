@@ -1,0 +1,29 @@
+{
+  "name": "fit-anim",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot ./index.ts",
+    "build": "rm -rf dist && bun build ./index.html --outdir=./dist --minify",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "bun run build && wrangler deploy"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/katex": "^0.16.8",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "wrangler": "^4.0.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "gif.js": "^0.2.0",
+    "katex": "^0.16.45",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

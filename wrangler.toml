@@ -1,0 +1,10 @@
+name = "fit-anim"
+compatibility_date = "2025-01-01"
+
+# Pure static SPA — no Worker script needed. Cloudflare's asset runtime
+# serves files from ./dist; the SPA fallback rewrites unknown paths to
+# index.html so client-side routing works (currently a single page, but
+# this keeps direct deep-links working if that ever changes).
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
