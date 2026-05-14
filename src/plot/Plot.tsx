@@ -55,11 +55,18 @@ export function Plot({ model, params, data, loss, testLoss, step, view, showLoss
   const equationVisible = isMlp ? showMlpDiagram : showPolyEquation;
   // The MLP diagram is taller than the polynomial equation, so the top margin grows when it's shown.
   const padTop = !equationVisible ? 32 : isMlp ? 170 : 78;
-  const baseBottom = data.display?.xLabel ? 64 : 48;
-  const stepLineHeight = 36;
-  const padBottom = baseBottom + (showErrorEquation ? visibleErrorSteps * stepLineHeight + 12 : 0);
+  // Vertical space carved out below the x-axis for: tick labels (~26 px),
+  // optional x-axis label (~26 if present), and the stepwise derivation lines.
+  const stepLineHeight = 38;
+  const tickStripHeight = 26;
+  const xLabelStripHeight = data.display?.xLabel ? 26 : 8;
+  const padBottom = showErrorEquation
+    ? tickStripHeight + visibleErrorSteps * stepLineHeight + xLabelStripHeight
+    : (data.display?.xLabel ? 64 : 48);
   const padLeft = data.display ? 88 : 56;
   const PAD = { top: padTop, right: 32, bottom: padBottom, left: padLeft };
+  // Baseline y of the first step's formula, sitting safely below the tick labels.
+  const stepsYStart = H - PAD.bottom + tickStripHeight + 18;
 
   const histActive = view === "histogram";
   const plotRight = histActive ? W - PAD.right - HIST_W - HIST_GAP : W - PAD.right;
@@ -139,7 +146,7 @@ export function Plot({ model, params, data, loss, testLoss, step, view, showLoss
           n={data.xs.length}
           steps={visibleErrorSteps}
           xLeft={PAD.left + 4}
-          yStart={H - PAD.bottom + 26}
+          yStart={stepsYStart}
           lineHeight={stepLineHeight}
         />
       )}
@@ -390,10 +397,10 @@ function ErrorDerivation({
         return (
           <g key={`step-${i}`}>
             <text className="step-num" x={xLeft} y={y}>{`${i + 1}.`}</text>
-            <text className="eq-text step-body" x={xLeft + 26} y={y} style={{ fontSize: 17 }}>
+            <text className="eq-text step-body" x={xLeft + 24} y={y} style={{ fontSize: 16 }}>
               {s.body}
             </text>
-            <text className="step-cap" x={xLeft + 26} y={y + 14}>
+            <text className="step-cap" x={xLeft + 24} y={y + 16}>
               {s.caption}
             </text>
           </g>
