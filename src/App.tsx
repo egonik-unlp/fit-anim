@@ -113,6 +113,7 @@ export function App() {
   const [showPolyEquation, setShowPolyEquation] = useState(true);
   const [showMlpDiagram, setShowMlpDiagram] = useState(false);
   const [showErrorEquation, setShowErrorEquation] = useState(false);
+  const [errorSteps, setErrorSteps] = useState(5);
   const [showLossCurve, setShowLossCurve] = useState(false);
   const [cleanMode, setCleanMode] = useState(false);
 
@@ -351,6 +352,7 @@ export function App() {
             showPolyEquation={showPolyEquation}
             showMlpDiagram={showMlpDiagram}
             showErrorEquation={showErrorEquation}
+            errorSteps={errorSteps}
           />
         </div>
         {showLossCurve && (
@@ -478,7 +480,20 @@ export function App() {
           <label className="checkbox-row"><input type="checkbox" checked={showLossText} onChange={(e) => setShowLossText(e.target.checked)} /> step / loss label</label>
           <label className="checkbox-row"><input type="checkbox" checked={showPolyEquation} onChange={(e) => setShowPolyEquation(e.target.checked)} /> polynomial equation</label>
           <label className="checkbox-row"><input type="checkbox" checked={showMlpDiagram} onChange={(e) => setShowMlpDiagram(e.target.checked)} /> MLP diagram</label>
-          <label className="checkbox-row"><input type="checkbox" checked={showErrorEquation} onChange={(e) => setShowErrorEquation(e.target.checked)} /> error function + value</label>
+          <label className="checkbox-row"><input type="checkbox" checked={showErrorEquation} onChange={(e) => setShowErrorEquation(e.target.checked)} /> error function (stepwise)</label>
+          {showErrorEquation && (
+            <div className="row">
+              <label>Pasos a mostrar <span className="value">{errorSteps} / 5</span></label>
+              <input
+                type="range"
+                min={1}
+                max={5}
+                step={1}
+                value={errorSteps}
+                onChange={(e) => setErrorSteps(+e.target.value)}
+              />
+            </div>
+          )}
           <label className="checkbox-row"><input type="checkbox" checked={showLossCurve} onChange={(e) => setShowLossCurve(e.target.checked)} /> loss curve (independent plot)</label>
           <label className="checkbox-row"><input type="checkbox" checked={cleanMode} onChange={(e) => setCleanMode(e.target.checked)} /> clean mode (hide UI)</label>
 
@@ -609,6 +624,7 @@ export function App() {
               showPolyEquation={showPolyEquation}
               showMlpDiagram={showMlpDiagram}
               showErrorEquation={showErrorEquation}
+              errorSteps={errorSteps}
             />
           </div>
           <div ref={exportLossRef} style={{ width: 1000 }}>

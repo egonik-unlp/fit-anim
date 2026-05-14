@@ -39,6 +39,8 @@ type Props = {
   showPolyEquation: boolean;
   showMlpDiagram: boolean;
   showErrorEquation: boolean;
+  /** how many derivation steps of the error/loss equation to reveal (1..5). */
+  errorSteps?: number;
 };
 
 // Outer SVG: 1000 x 600. Histogram view consumes a right strip.
@@ -47,12 +49,15 @@ const H = 600;
 const HIST_W = 240;
 const HIST_GAP = 24;
 
-export function Plot({ model, params, data, loss, testLoss, step, view, showLossText, showAxes, showPolyEquation, showMlpDiagram, showErrorEquation }: Props) {
+export function Plot({ model, params, data, loss, testLoss, step, view, showLossText, showAxes, showPolyEquation, showMlpDiagram, showErrorEquation, errorSteps = 5 }: Props) {
+  const visibleErrorSteps = Math.max(1, Math.min(5, Math.round(errorSteps)));
   const isMlp = model.id.startsWith("mlp-");
   const equationVisible = isMlp ? showMlpDiagram : showPolyEquation;
   // The MLP diagram is taller than the polynomial equation, so the top margin grows when it's shown.
   const padTop = !equationVisible ? 32 : isMlp ? 170 : 78;
-  const padBottom = showErrorEquation ? 100 : data.display?.xLabel ? 64 : 48;
+  const baseBottom = data.display?.xLabel ? 64 : 48;
+  const stepLineHeight = 36;
+  const padBottom = baseBottom + (showErrorEquation ? visibleErrorSteps * stepLineHeight + 12 : 0);
   const padLeft = data.display ? 88 : 56;
   const PAD = { top: padTop, right: 32, bottom: padBottom, left: padLeft };
 
@@ -122,10 +127,22 @@ export function Plot({ model, params, data, loss, testLoss, step, view, showLoss
         .diag-cap { font: 10px ui-sans-serif, system-ui, sans-serif; fill: #888; text-transform: uppercase; letter-spacing: 0.12em; }
         .diag-ellipsis { font: 16px ui-sans-serif, system-ui, sans-serif; fill: #888; }
         .diag-tanh { font: italic 11px "Iowan Old Style", Palatino, Georgia, serif; fill: #444; }
+        .step-num { font: 600 13px ui-sans-serif, system-ui, sans-serif; fill: #888; }
+        .step-body { fill: #111; }
+        .step-cap { font: italic 11px "Iowan Old Style", Palatino, Georgia, serif; fill: #888; }
       `}</style>
 
       {equationVisible && <EquationOverlay model={model} params={params} display={data.display} />}
-      {showErrorEquation && <ErrorEquation loss={loss} n={data.xs.length} cx={W / 2} cy={H - 32} />}
+      {showErrorEquation && (
+        <ErrorDerivation
+          loss={loss}
+          n={data.xs.length}
+          steps={visibleErrorSteps}
+          xLeft={PAD.left + 4}
+          yStart={H - PAD.bottom + 26}
+          lineHeight={stepLineHeight}
+        />
+      )}
 
       {/* axes */}
       {showAxes && (
@@ -256,37 +273,132 @@ export function Plot({ model, params, data, loss, testLoss, step, view, showLoss
   );
 }
 
-// --- error function equation (bottom) ---
-function ErrorEquation({ loss, n, cx, cy }: { loss: number; n: number; cx: number; cy: number }) {
-  // L(θ) = (1/N) Σᵢ ( yᵢ − f(xᵢ; θ) )²   =   <live value>
+// --- stepwise error/loss derivation, rendered at the bottom of the plot ---
+function ErrorDerivation({
+  loss,
+  n,
+  steps,
+  xLeft,
+  yStart,
+  lineHeight,
+}: {
+  loss: number;
+  n: number;
+  steps: number;
+  xLeft: number;
+  yStart: number;
+  lineHeight: number;
+}) {
+  // The five steps build the loss from the fitted equation, in order:
+  //   1. ŷᵢ = f(xᵢ; θ)                              (the model's prediction)
+  //   2. eᵢ = yᵢ − ŷᵢ                                (residual at each point)
+  //   3. eᵢ² = (yᵢ − f(xᵢ; θ))²                      (square: positive, penaliza más los errores grandes)
+  //   4. L(θ) = (1/N) Σ eᵢ²                          (promedio sobre todos los puntos)
+  //   5. L(θ) = (1/N) Σ (yᵢ − f(xᵢ; θ))² = <value>  (sustituyendo y evaluando)
+  const sub = (s: React.ReactNode) => (
+    <>
+      <tspan className="sup" dy="0.35em">{s}</tspan>
+      <tspan dy="-0.35em">{""}</tspan>
+    </>
+  );
+  const sup = (s: React.ReactNode) => (
+    <>
+      <tspan className="sup" dy="-0.55em">{s}</tspan>
+      <tspan dy="0.55em">{""}</tspan>
+    </>
+  );
+
+  const allSteps: Array<{ caption: string; body: React.ReactNode }> = [
+    {
+      caption: "predicción del modelo en cada punto",
+      body: (
+        <>
+          <tspan className="var">ŷ</tspan>{sub("i")}
+          <tspan className="op">{" = "}</tspan>
+          <tspan>f(</tspan><tspan className="var">x</tspan>{sub("i")}
+          <tspan>{"; "}</tspan><tspan className="var">θ</tspan><tspan>)</tspan>
+        </>
+      ),
+    },
+    {
+      caption: "error en cada punto = real − predicho",
+      body: (
+        <>
+          <tspan className="var">e</tspan>{sub("i")}
+          <tspan className="op">{" = "}</tspan>
+          <tspan className="var">y</tspan>{sub("i")}
+          <tspan className="op">{" − "}</tspan>
+          <tspan className="var">ŷ</tspan>{sub("i")}
+        </>
+      ),
+    },
+    {
+      caption: "elevamos al cuadrado (positivo, y penaliza más los errores grandes)",
+      body: (
+        <>
+          <tspan className="var">e</tspan>{sub("i")}{sup("2")}
+          <tspan className="op">{" = ("}</tspan>
+          <tspan className="var">y</tspan>{sub("i")}
+          <tspan className="op">{" − f("}</tspan>
+          <tspan className="var">x</tspan>{sub("i")}
+          <tspan className="op">{"; "}</tspan><tspan className="var">θ</tspan><tspan>{")"}</tspan>
+          <tspan>{")"}</tspan>{sup("2")}
+        </>
+      ),
+    },
+    {
+      caption: "promediamos sobre los N puntos: la función de error (loss)",
+      body: (
+        <>
+          <tspan className="var">L</tspan><tspan>{"("}</tspan>
+          <tspan className="var">θ</tspan><tspan>{") = (1/"}</tspan>
+          <tspan className="var">N</tspan><tspan>{") "}</tspan>
+          <tspan style={{ fontSize: "1.3em" }}>{"∑"}</tspan>
+          {sub(`i=1..${n}`)}
+          <tspan>{" "}</tspan>
+          <tspan className="var">e</tspan>{sub("i")}{sup("2")}
+        </>
+      ),
+    },
+    {
+      caption: "sustituimos y calculamos el valor actual de L",
+      body: (
+        <>
+          <tspan className="var">L</tspan><tspan>{"("}</tspan>
+          <tspan className="var">θ</tspan><tspan>{") = (1/"}</tspan>
+          <tspan className="var">N</tspan><tspan>{") "}</tspan>
+          <tspan style={{ fontSize: "1.3em" }}>{"∑"}</tspan>
+          {sub(`i=1..${n}`)}
+          <tspan>{" ("}</tspan>
+          <tspan className="var">y</tspan>{sub("i")}
+          <tspan className="op">{" − f("}</tspan>
+          <tspan className="var">x</tspan>{sub("i")}
+          <tspan className="op">{"; "}</tspan><tspan className="var">θ</tspan><tspan>{")"}</tspan>
+          <tspan>{")"}</tspan>{sup("2")}
+          <tspan className="op">{"   =   "}</tspan>
+          <tspan className="num">{loss.toExponential(3)}</tspan>
+        </>
+      ),
+    },
+  ];
+
+  const visible = allSteps.slice(0, steps);
   return (
     <g>
-      <text className="eq-text" x={cx} y={cy} textAnchor="middle" style={{ fontSize: 19 }}>
-        <tspan className="var">L</tspan>
-        <tspan>(</tspan>
-        <tspan className="var">θ</tspan>
-        <tspan>)</tspan>
-        <tspan className="op">{"  =  "}</tspan>
-        <tspan>{"(1/"}</tspan>
-        <tspan className="var">N</tspan>
-        <tspan>{") "}</tspan>
-        <tspan style={{ fontSize: "1.3em" }}>{"∑"}</tspan>
-        <tspan className="sup" dy="0.35em">{`i=1..${n}`}</tspan>
-        <tspan dy="-0.35em">{" ("}</tspan>
-        <tspan className="var">y</tspan>
-        <tspan className="sup" dy="0.35em">i</tspan>
-        <tspan dy="-0.35em">{" "}</tspan>
-        <tspan className="op">−</tspan>
-        <tspan>{" f("}</tspan>
-        <tspan className="var">x</tspan>
-        <tspan className="sup" dy="0.35em">i</tspan>
-        <tspan dy="-0.35em">{"; "}</tspan>
-        <tspan className="var">θ</tspan>
-        <tspan>{"))"}</tspan>
-        <tspan className="sup" dy="-0.55em">2</tspan>
-        <tspan dy="0.55em" className="op">{"   =   "}</tspan>
-        <tspan className="num">{loss.toExponential(3)}</tspan>
-      </text>
+      {visible.map((s, i) => {
+        const y = yStart + i * lineHeight;
+        return (
+          <g key={`step-${i}`}>
+            <text className="step-num" x={xLeft} y={y}>{`${i + 1}.`}</text>
+            <text className="eq-text step-body" x={xLeft + 26} y={y} style={{ fontSize: 17 }}>
+              {s.body}
+            </text>
+            <text className="step-cap" x={xLeft + 26} y={y + 14}>
+              {s.caption}
+            </text>
+          </g>
+        );
+      })}
     </g>
   );
 }
