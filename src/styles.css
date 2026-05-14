@@ -135,6 +135,31 @@ html, body { margin: 0; padding: 0; background: #fafafa; color: #111; font-famil
 
 #hidden-canvas { position: fixed; left: -99999px; top: -99999px; }
 
+.export-mount {
+  position: fixed;
+  left: -99999px;
+  top: 0;
+  width: 1000px;
+  pointer-events: none;
+  background: white;
+}
+
+.export-picker {
+  border: 1px solid #d8d8d8;
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #fafafa;
+}
+.export-picker .title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #888;
+}
+
 .zen-exit {
   position: fixed;
   top: 14px;

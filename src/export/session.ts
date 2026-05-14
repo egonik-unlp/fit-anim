@@ -23,6 +23,8 @@ export type SessionOpts = {
   startDwellFrames?: number;
   /** final extra frames after convergence */
   endDwellFrames?: number;
+  /** optional cancellation; the session exits between frames if aborted */
+  signal?: AbortSignal;
 };
 
 /** Run a full auto-training session, calling onFrame for each frame to record.
@@ -40,6 +42,7 @@ export async function runAutoSession(
   const dwell = opts.milestoneDwellFrames ?? 24;
   const startDwell = opts.startDwellFrames ?? 18;
   const endDwell = opts.endDwellFrames ?? 36;
+  const signal = opts.signal;
 
   let params = initParams.slice();
   let curLoss = computeLoss(model, data, params);
@@ -47,11 +50,13 @@ export async function runAutoSession(
 
   // initial frame (dwell)
   for (let i = 0; i < startDwell; i++) {
+    if (signal?.aborted) return;
     await onFrame({ params, loss: curLoss, step: 0, milestone: i === 0 ? "initial" : null });
   }
 
   let s = 0;
   while (s < maxSteps && !auto.done) {
+    if (signal?.aborted) return;
     const res = step(model, data, params, opts.lr);
     params = res.params;
     curLoss = res.loss;
@@ -60,12 +65,14 @@ export async function runAutoSession(
     await onFrame({ params, loss: curLoss, step: s, milestone: ms });
     if (ms === "half" || ms === "near") {
       for (let i = 0; i < dwell; i++) {
+        if (signal?.aborted) return;
         await onFrame({ params, loss: curLoss, step: s, milestone: null });
       }
     }
   }
   // end dwell
   for (let i = 0; i < endDwell; i++) {
+    if (signal?.aborted) return;
     await onFrame({ params, loss: curLoss, step: s, milestone: i === 0 ? "final" : null });
   }
 }

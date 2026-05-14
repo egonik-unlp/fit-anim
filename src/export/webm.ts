@@ -1,10 +1,10 @@
-import { rasteriseSvg, downloadBlob } from "./raster";
+import { rasteriseSvgsStacked, downloadBlob } from "./raster";
 import { runAutoSession, type SessionOpts } from "./session";
 import type { Model, Params } from "../models/types";
 import type { Dataset } from "../data/presets";
 
 export async function recordWebm(
-  svg: SVGSVGElement,
+  svgs: SVGSVGElement[],
   canvas: HTMLCanvasElement,
   model: Model,
   data: Dataset,
@@ -28,7 +28,7 @@ export async function recordWebm(
   let frameIdx = 0;
   await runAutoSession(model, data, initParams, opts, async ({ params, loss, step }) => {
     await opts.onPaint(params, step, loss);
-    await rasteriseSvg(svg, canvas, 1);
+    await rasteriseSvgsStacked(svgs, canvas, 1);
     frameIdx++;
     if (frameIdx % 30 === 0) setStatus(`recording webm… frame ${frameIdx}, step ${step}`);
     // pace to roughly fps
@@ -37,7 +37,12 @@ export async function recordWebm(
 
   rec.stop();
   await done;
+  const aborted = opts.signal?.aborted === true;
+  if (chunks.length === 0) {
+    setStatus(aborted ? "stopped, no frames captured" : "no frames captured");
+    return;
+  }
   const blob = new Blob(chunks, { type: mime });
   downloadBlob(blob, `fit-anim-${Date.now()}.webm`);
-  setStatus(`webm saved (${(blob.size / 1024).toFixed(0)} kB)`);
+  setStatus(`webm saved (${(blob.size / 1024).toFixed(0)} kB${aborted ? ", partial" : ""})`);
 }

@@ -6,11 +6,12 @@ import { makeMLP } from "./models/mlp";
 import type { Model, Params } from "./models/types";
 import { makeDataset, PRESET_LABELS, type PresetId } from "./data/presets";
 import { step as trainStep, loss as computeLoss } from "./training/loop";
-import { rasteriseSvg, serializeSvg, downloadBlob, canvasToBlob, nextFrame } from "./export/raster";
+import { rasteriseSvgsStacked, serializeSvg, downloadBlob, canvasToBlob, nextFrame } from "./export/raster";
 import { recordWebm } from "./export/webm";
 import { recordGif, recordPngSequence } from "./export/gif";
 
 type ModelKind = "poly" | "mlp";
+type ExportKind = "webm" | "gif" | "zip";
 
 function makeModel(kind: ModelKind, param: number): Model {
   return kind === "poly" ? makePoly(param) : makeMLP(param);
@@ -138,17 +139,37 @@ export function App() {
   // --- refs ---
   const svgWrapperRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const exportMainRef = useRef<HTMLDivElement>(null);
+  const exportLossRef = useRef<HTMLDivElement>(null);
+  const recordAbortRef = useRef<AbortController | null>(null);
   const [exportStatus, setExportStatus] = useState("");
   const [exporting, setExporting] = useState(false);
   const [pngScale, setPngScale] = useState(2);
 
-  function getSvg(): SVGSVGElement | null {
+  // Export-time plot selection (independent of on-screen toggles).
+  const [exportPlots, setExportPlots] = useState({ main: true, lossCurve: false });
+  // When set, the inline picker is shown for that export kind. null = no pending export.
+  const [pendingExport, setPendingExport] = useState<ExportKind | null>(null);
+
+  function getMainSvg(): SVGSVGElement | null {
     return svgWrapperRef.current?.querySelector("svg") ?? null;
+  }
+  function getExportSvgs(): SVGSVGElement[] {
+    const out: SVGSVGElement[] = [];
+    if (exportPlots.main) {
+      const s = exportMainRef.current?.querySelector("svg") as SVGSVGElement | null;
+      if (s) out.push(s);
+    }
+    if (exportPlots.lossCurve) {
+      const s = exportLossRef.current?.querySelector("svg") as SVGSVGElement | null;
+      if (s) out.push(s);
+    }
+    return out;
   }
 
   // --- export handlers ---
   const exportSvg = useCallback(async () => {
-    const svg = getSvg();
+    const svg = getMainSvg();
     if (!svg) return;
     const xml = serializeSvg(svg);
     downloadBlob(new Blob([xml], { type: "image/svg+xml" }), `fit-anim-${Date.now()}.svg`);
@@ -156,10 +177,10 @@ export function App() {
   }, []);
 
   const exportPng = useCallback(async () => {
-    const svg = getSvg();
+    const svg = getMainSvg();
     const canvas = canvasRef.current;
     if (!svg || !canvas) return;
-    await rasteriseSvg(svg, canvas, pngScale);
+    await rasteriseSvgsStacked([svg], canvas, pngScale);
     const blob = await canvasToBlob(canvas, "image/png");
     downloadBlob(blob, `fit-anim-${Date.now()}.png`);
     setExportStatus(`png saved (${(blob.size / 1024).toFixed(0)} kB, ${canvas.width}×${canvas.height})`);
@@ -178,21 +199,32 @@ export function App() {
 
   const runRecording = useCallback(
     async (
-      kind: "webm" | "gif" | "zip",
+      kind: ExportKind,
       sessionExtras: { fps?: number; keepEvery?: number } = {}
     ) => {
-      const svg = getSvg();
       const canvas = canvasRef.current;
-      if (!svg || !canvas) return;
+      if (!canvas) return;
+      // Ensure the hidden export-mount has flushed at least one frame so its SVGs exist.
       setExporting(true);
       setPlaying(false);
+      await nextFrame();
+      const svgs = getExportSvgs();
+      if (svgs.length === 0) {
+        setExportStatus("no plots selected");
+        setExporting(false);
+        return;
+      }
       // reset training so the recording always shows the same arc
       const init = model.init(paramSeed);
       setParams(init);
       setStepN(0);
       await nextFrame();
-      // pre-size the canvas
-      await rasteriseSvg(svg, canvas, 1);
+      // pre-size the canvas based on stacked plot dimensions
+      await rasteriseSvgsStacked(svgs, canvas, 1);
+
+      const controller = new AbortController();
+      recordAbortRef.current = controller;
+
       try {
         const common = {
           lr,
@@ -204,23 +236,49 @@ export function App() {
           fps: sessionExtras.fps ?? 30,
           keepEvery: sessionExtras.keepEvery,
           onPaint: paint,
+          signal: controller.signal,
         };
         if (kind === "webm") {
-          await recordWebm(svg, canvas, model, data, init, common, setExportStatus);
+          await recordWebm(svgs, canvas, model, data, init, common, setExportStatus);
         } else if (kind === "gif") {
-          await recordGif(svg, canvas, model, data, init, common, setExportStatus);
+          await recordGif(svgs, canvas, model, data, init, common, setExportStatus);
         } else {
-          await recordPngSequence(svg, canvas, model, data, init, common, setExportStatus);
+          await recordPngSequence(svgs, canvas, model, data, init, common, setExportStatus);
         }
       } catch (e) {
         console.error(e);
         setExportStatus(`error: ${(e as Error).message}`);
       } finally {
+        recordAbortRef.current = null;
         setExporting(false);
       }
     },
-    [model, data, lr, paramSeed, paint]
+    [model, data, lr, paramSeed, paint, exportPlots]
   );
+
+  const beginExport = useCallback((kind: ExportKind) => {
+    setPendingExport(kind);
+  }, []);
+
+  const confirmExport = useCallback(() => {
+    const kind = pendingExport;
+    if (!kind) return;
+    setPendingExport(null);
+    const extras =
+      kind === "webm" ? { fps: 30 }
+      : kind === "gif" ? { fps: 20, keepEvery: 2 }
+      : { fps: 30, keepEvery: 1 };
+    void runRecording(kind, extras);
+  }, [pendingExport, runRecording]);
+
+  const stopRecording = useCallback(() => {
+    recordAbortRef.current?.abort();
+    setExportStatus((s) => s + " · stopping…");
+  }, []);
+
+  // Mount the hidden export plots only when we need them, to avoid the cost of
+  // rendering two extra plots during normal interactive use.
+  const exportMounted = pendingExport !== null || exporting;
 
   return (
     <>
@@ -347,15 +405,78 @@ export function App() {
             <button className="btn" onClick={exportPng} disabled={exporting}>PNG</button>
             <button className="btn" onClick={exportSvg} disabled={exporting}>SVG</button>
           </div>
-          <div className="btn-row">
-            <button className="btn" onClick={() => runRecording("webm", { fps: 30 })} disabled={exporting}>WebM</button>
-            <button className="btn" onClick={() => runRecording("gif", { fps: 20, keepEvery: 2 })} disabled={exporting}>GIF</button>
-            <button className="btn" onClick={() => runRecording("zip", { fps: 30, keepEvery: 1 })} disabled={exporting}>PNG zip</button>
-          </div>
+
+          {exporting ? (
+            <div className="btn-row">
+              <button className="btn" onClick={stopRecording}>Stop</button>
+            </div>
+          ) : pendingExport ? (
+            <div className="export-picker">
+              <span className="title">include in {pendingExport}</span>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={exportPlots.main}
+                  onChange={(e) => setExportPlots((s) => ({ ...s, main: e.target.checked }))}
+                />
+                main plot
+              </label>
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={exportPlots.lossCurve}
+                  onChange={(e) => setExportPlots((s) => ({ ...s, lossCurve: e.target.checked }))}
+                />
+                loss curve
+              </label>
+              <div className="btn-row">
+                <button
+                  className="btn primary"
+                  onClick={confirmExport}
+                  disabled={!exportPlots.main && !exportPlots.lossCurve}
+                >
+                  Record
+                </button>
+                <button className="btn" onClick={() => setPendingExport(null)}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <div className="btn-row">
+              <button className="btn" onClick={() => beginExport("webm")}>WebM</button>
+              <button className="btn" onClick={() => beginExport("gif")}>GIF</button>
+              <button className="btn" onClick={() => beginExport("zip")}>PNG zip</button>
+            </div>
+          )}
           <div className="export-status">{exportStatus}</div>
         </div>
       </div>
       <canvas id="hidden-canvas" ref={canvasRef} width={1000} height={600} />
+
+      {/* Hidden mount used as the canonical source for export rasterisation.
+          Mounted only while a recording is being configured or running. */}
+      {exportMounted && (
+        <div className="export-mount" aria-hidden>
+          <div ref={exportMainRef} style={{ width: 1000 }}>
+            <Plot
+              model={model}
+              params={params}
+              data={data}
+              loss={curLoss}
+              step={stepN}
+              view={view}
+              showLossText={showLossText}
+              showAxes={showAxes}
+              showPolyEquation={showPolyEquation}
+              showMlpDiagram={showMlpDiagram}
+              showErrorEquation={showErrorEquation}
+            />
+          </div>
+          <div ref={exportLossRef} style={{ width: 1000 }}>
+            <LossCurve history={history} />
+          </div>
+        </div>
+      )}
+
       {cleanMode && (
         <button
           className="zen-exit"
