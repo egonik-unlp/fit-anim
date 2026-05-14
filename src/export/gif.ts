@@ -16,6 +16,10 @@ type CommonOpts = SessionOpts & {
   onPaint: (params: Params, step: number, loss: number) => Promise<void>;
   /** keep every Nth frame (for size). default 2. */
   keepEvery?: number;
+  /** pixel scale for the rasterised frames (1 = native viewBox size) */
+  scale?: number;
+  /** gif.js quality, lower = better but slower (default 10) */
+  gifQuality?: number;
 };
 
 export async function recordGif(
@@ -29,11 +33,12 @@ export async function recordGif(
 ) {
   const fps = opts.fps ?? 20;
   const keep = opts.keepEvery ?? 2;
+  const scale = opts.scale ?? 1;
   setStatus("recording gif…");
 
   const gif = new GIF({
     workers: 2,
-    quality: 10,
+    quality: opts.gifQuality ?? 10,
     width: canvas.width || 1000,
     height: canvas.height || 600,
     workerScript: GIF_WORKER_URL,
@@ -44,7 +49,7 @@ export async function recordGif(
   let framesAdded = 0;
   await runAutoSession(model, data, initParams, opts, async ({ params, loss, step }) => {
     await opts.onPaint(params, step, loss);
-    await rasteriseSvgsStacked(svgs, canvas, 1);
+    await rasteriseSvgsStacked(svgs, canvas, scale);
     if (frameIdx % keep === 0) {
       gif.addFrame(canvas, { copy: true, delay: Math.round(1000 / (fps / keep)) });
       framesAdded++;
@@ -80,13 +85,14 @@ export async function recordPngSequence(
   setStatus: (s: string) => void
 ) {
   const keep = opts.keepEvery ?? 1;
+  const scale = opts.scale ?? 1;
   setStatus("capturing PNG sequence…");
   const files: Record<string, Uint8Array> = {};
   let frameIdx = 0;
   let saved = 0;
   await runAutoSession(model, data, initParams, opts, async ({ params, loss, step }) => {
     await opts.onPaint(params, step, loss);
-    await rasteriseSvgsStacked(svgs, canvas, 1);
+    await rasteriseSvgsStacked(svgs, canvas, scale);
     if (frameIdx % keep === 0) {
       const blob = await canvasToBlob(canvas, "image/png");
       const ab = await blob.arrayBuffer();

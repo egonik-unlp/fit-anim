@@ -9,16 +9,26 @@ export async function recordWebm(
   model: Model,
   data: Dataset,
   initParams: Params,
-  opts: SessionOpts & { onPaint: (params: Params, step: number, loss: number) => Promise<void> },
+  opts: SessionOpts & {
+    onPaint: (params: Params, step: number, loss: number) => Promise<void>;
+    /** pixel scale for the rasterised frames (1 = native viewBox size) */
+    scale?: number;
+    /** WebM target bitrate in bits/sec; default 4 Mbps */
+    videoBitsPerSecond?: number;
+  },
   setStatus: (s: string) => void
 ) {
   const fps = opts.fps ?? 30;
+  const scale = opts.scale ?? 1;
   const stream = canvas.captureStream(fps);
   const mime =
     MediaRecorder.isTypeSupported("video/webm;codecs=vp9")
       ? "video/webm;codecs=vp9"
       : "video/webm";
-  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 4_000_000 });
+  const rec = new MediaRecorder(stream, {
+    mimeType: mime,
+    videoBitsPerSecond: opts.videoBitsPerSecond ?? 4_000_000,
+  });
   const chunks: Blob[] = [];
   rec.ondataavailable = (e) => e.data.size > 0 && chunks.push(e.data);
   const done = new Promise<void>((res) => (rec.onstop = () => res()));
@@ -28,7 +38,7 @@ export async function recordWebm(
   let frameIdx = 0;
   await runAutoSession(model, data, initParams, opts, async ({ params, loss, step }) => {
     await opts.onPaint(params, step, loss);
-    await rasteriseSvgsStacked(svgs, canvas, 1);
+    await rasteriseSvgsStacked(svgs, canvas, scale);
     frameIdx++;
     if (frameIdx % 30 === 0) setStatus(`recording webm… frame ${frameIdx}, step ${step}`);
     // pace to roughly fps

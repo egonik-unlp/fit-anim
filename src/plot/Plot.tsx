@@ -10,6 +10,8 @@ type Props = {
   params: Params;
   data: Dataset;
   loss: number;
+  /** optional held-out test loss; shown alongside train loss when defined */
+  testLoss?: number;
   step: number;
   view: ResidualView;
   showLossText: boolean;
@@ -25,7 +27,7 @@ const H = 600;
 const HIST_W = 240;
 const HIST_GAP = 24;
 
-export function Plot({ model, params, data, loss, step, view, showLossText, showAxes, showPolyEquation, showMlpDiagram, showErrorEquation }: Props) {
+export function Plot({ model, params, data, loss, testLoss, step, view, showLossText, showAxes, showPolyEquation, showMlpDiagram, showErrorEquation }: Props) {
   const isMlp = model.id.startsWith("mlp-");
   const equationVisible = isMlp ? showMlpDiagram : showPolyEquation;
   // The MLP diagram is taller than the polynomial equation, so the top margin grows when it's shown.
@@ -50,9 +52,14 @@ export function Plot({ model, params, data, loss, step, view, showLossText, show
     return d;
   }, [model, params, data, plotRight]);
 
-  // per-point predictions and residuals
+  // per-point predictions and residuals (train fold)
   const preds = useMemo(() => data.xs.map((xv) => model.forward(xv, params)), [model, params, data]);
   const residuals = useMemo(() => data.ys.map((yv, i) => yv - preds[i]!), [data.ys, preds]);
+  // test-fold predictions (residual segments drawn from test point to model curve)
+  const testPreds = useMemo(
+    () => (data.test ? data.test.xs.map((xv) => model.forward(xv, params)) : null),
+    [model, params, data]
+  );
 
   const xTicks = showAxes ? niceTicks(data.xMin, data.xMax, 5) : [];
   const yTicks = showAxes ? niceTicks(data.yMin, data.yMax, 5) : [];
@@ -69,8 +76,10 @@ export function Plot({ model, params, data, loss, step, view, showLossText, show
         .axis { stroke: #111; stroke-width: 1; fill: none; }
         .tick-label { font: 12px ui-sans-serif, system-ui, sans-serif; fill: #333; }
         .data-dot { fill: #b8b8b8; }
+        .test-dot { fill: white; stroke: #1e6bb8; stroke-width: 1.2; }
         .pred-dot { fill: #111; }
         .resid-seg { stroke: #888; stroke-width: 0.8; opacity: 0.55; }
+        .resid-seg-test { stroke: #1e6bb8; stroke-width: 0.9; opacity: 0.75; stroke-dasharray: 2 2; }
         .model-curve { stroke: #111; stroke-width: 1.8; fill: none; }
         .strip { fill: #111; opacity: 0.06; }
         .hist-bar { fill: #c8c8c8; }
@@ -143,6 +152,16 @@ export function Plot({ model, params, data, loss, step, view, showLossText, show
               y2={y(preds[i]!)}
             />
           ))}
+          {data.test && testPreds && data.test.xs.map((xv, i) => (
+            <line
+              key={`rt${i}`}
+              className="resid-seg-test"
+              x1={x(xv)}
+              y1={y(data.test!.ys[i]!)}
+              x2={x(xv)}
+              y2={y(testPreds[i]!)}
+            />
+          ))}
         </g>
       )}
 
@@ -150,6 +169,9 @@ export function Plot({ model, params, data, loss, step, view, showLossText, show
       <g>
         {data.xs.map((xv, i) => (
           <circle key={`d${i}`} className="data-dot" cx={x(xv)} cy={y(data.ys[i]!)} r={2.6} />
+        ))}
+        {data.test && data.test.xs.map((xv, i) => (
+          <circle key={`dt${i}`} className="test-dot" cx={x(xv)} cy={y(data.test!.ys[i]!)} r={2.8} />
         ))}
       </g>
 
@@ -180,7 +202,11 @@ export function Plot({ model, params, data, loss, step, view, showLossText, show
       {showLossText && (
         <g>
           <text className="info-text" x={PAD.left + 4} y={H - PAD.bottom - 10}>
-            {`step ${step}   loss ${loss.toExponential(2)}`}
+            {data.test
+              ? `step ${step}   train ${loss.toExponential(2)}   test ${
+                  testLoss !== undefined ? testLoss.toExponential(2) : "—"
+                }`
+              : `step ${step}   loss ${loss.toExponential(2)}`}
           </text>
         </g>
       )}

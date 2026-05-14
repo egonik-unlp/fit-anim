@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plot, type ResidualView } from "./plot/Plot";
-import { LossCurve } from "./plot/LossCurve";
+import { LossCurve, type LossPoint } from "./plot/LossCurve";
 import { makePoly } from "./models/poly";
 import { makeMLP } from "./models/mlp";
 import type { Model, Params } from "./models/types";
@@ -25,6 +25,7 @@ export function App() {
   const [preset, setPreset] = useState<PresetId>("cubic");
   const [noise, setNoise] = useState(0.15);
   const [nPoints, setNPoints] = useState(80);
+  const [testRatio, setTestRatio] = useState(0);
   const [dataSeed, setDataSeed] = useState(1);
   const [paramSeed, setParamSeed] = useState(1);
 
@@ -33,8 +34,8 @@ export function App() {
     [modelKind, polyDeg, mlpHidden]
   );
   const data = useMemo(
-    () => makeDataset(preset, { n: nPoints, noise, seed: dataSeed }),
-    [preset, nPoints, noise, dataSeed]
+    () => makeDataset(preset, { n: nPoints, noise, seed: dataSeed, testRatio }),
+    [preset, nPoints, noise, dataSeed, testRatio]
   );
 
   // --- training state ---
@@ -58,6 +59,20 @@ export function App() {
   }, [modelKind, polyDeg]);
 
   const curLoss = useMemo(() => computeLoss(model, data, params), [model, data, params]);
+  const curTestLoss = useMemo(() => {
+    if (!data.test) return undefined;
+    // `loss` only reads xs/ys; synthesize a minimal Dataset over the test fold.
+    const testDs = {
+      xs: data.test.xs,
+      ys: data.test.ys,
+      truth: data.truth,
+      xMin: data.xMin,
+      xMax: data.xMax,
+      yMin: data.yMin,
+      yMax: data.yMax,
+    };
+    return computeLoss(model, testDs, params);
+  }, [model, data, params]);
 
   // --- play loop ---
   useEffect(() => {
@@ -102,24 +117,26 @@ export function App() {
   const [cleanMode, setCleanMode] = useState(false);
 
   // Loss history for the independent loss-curve plot.
-  const [history, setHistory] = useState<Array<{ step: number; loss: number }>>(
-    () => [{ step: 0, loss: 0 }]
-  );
+  const [history, setHistory] = useState<LossPoint[]>(() => [{ step: 0, train: 0 }]);
   useEffect(() => {
     setHistory((h) => {
+      const entry: LossPoint = { step: stepN, train: curLoss };
+      if (curTestLoss !== undefined) entry.test = curTestLoss;
       const last = h[h.length - 1];
       if (last && last.step === stepN) {
         const copy = h.slice(0, -1);
-        copy.push({ step: stepN, loss: curLoss });
+        copy.push(entry);
         return copy;
       }
-      const next = h.concat({ step: stepN, loss: curLoss });
+      const next = h.concat(entry);
       return next.length > 4000 ? next.slice(-4000) : next;
     });
-  }, [stepN, curLoss]);
+  }, [stepN, curLoss, curTestLoss]);
   // Clear history whenever the training arc resets.
   useEffect(() => {
-    setHistory([{ step: 0, loss: curLoss }]);
+    const entry: LossPoint = { step: 0, train: curLoss };
+    if (curTestLoss !== undefined) entry.test = curTestLoss;
+    setHistory([entry]);
     // intentionally only on identity-of-arc changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, data, paramSeed]);
@@ -150,6 +167,15 @@ export function App() {
   const [exportPlots, setExportPlots] = useState({ main: true, lossCurve: false });
   // When set, the inline picker is shown for that export kind. null = no pending export.
   const [pendingExport, setPendingExport] = useState<ExportKind | null>(null);
+
+  // Recording options (apply to WebM/GIF/PNG zip).
+  const [recFps, setRecFps] = useState(30);
+  const [recScale, setRecScale] = useState(1);
+  const [recMaxSteps, setRecMaxSteps] = useState(600);
+  const [recDwellSec, setRecDwellSec] = useState(1.0);
+  const [recKeepEvery, setRecKeepEvery] = useState(1);
+  const [recBitrateMbps, setRecBitrateMbps] = useState(4);
+  const [recGifQuality, setRecGifQuality] = useState(10);
 
   function getMainSvg(): SVGSVGElement | null {
     return svgWrapperRef.current?.querySelector("svg") ?? null;
@@ -198,10 +224,7 @@ export function App() {
   );
 
   const runRecording = useCallback(
-    async (
-      kind: ExportKind,
-      sessionExtras: { fps?: number; keepEvery?: number } = {}
-    ) => {
+    async (kind: ExportKind) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
       // Ensure the hidden export-mount has flushed at least one frame so its SVGs exist.
@@ -219,8 +242,8 @@ export function App() {
       setParams(init);
       setStepN(0);
       await nextFrame();
-      // pre-size the canvas based on stacked plot dimensions
-      await rasteriseSvgsStacked(svgs, canvas, 1);
+      // pre-size the canvas based on stacked plot dimensions and chosen scale
+      await rasteriseSvgsStacked(svgs, canvas, recScale);
 
       const controller = new AbortController();
       recordAbortRef.current = controller;
@@ -228,20 +251,37 @@ export function App() {
       try {
         const common = {
           lr,
-          maxSteps: 600,
+          maxSteps: recMaxSteps,
           gradTol: 1e-3,
-          milestoneDwellFrames: Math.round((sessionExtras.fps ?? 30) * 1.0),
-          startDwellFrames: Math.round((sessionExtras.fps ?? 30) * 0.6),
-          endDwellFrames: Math.round((sessionExtras.fps ?? 30) * 1.2),
-          fps: sessionExtras.fps ?? 30,
-          keepEvery: sessionExtras.keepEvery,
+          milestoneDwellFrames: Math.round(recFps * recDwellSec),
+          startDwellFrames: Math.round(recFps * recDwellSec * 0.6),
+          endDwellFrames: Math.round(recFps * recDwellSec * 1.2),
+          fps: recFps,
+          keepEvery: recKeepEvery,
+          scale: recScale,
           onPaint: paint,
           signal: controller.signal,
         };
         if (kind === "webm") {
-          await recordWebm(svgs, canvas, model, data, init, common, setExportStatus);
+          await recordWebm(
+            svgs,
+            canvas,
+            model,
+            data,
+            init,
+            { ...common, videoBitsPerSecond: Math.round(recBitrateMbps * 1_000_000) },
+            setExportStatus
+          );
         } else if (kind === "gif") {
-          await recordGif(svgs, canvas, model, data, init, common, setExportStatus);
+          await recordGif(
+            svgs,
+            canvas,
+            model,
+            data,
+            init,
+            { ...common, gifQuality: recGifQuality },
+            setExportStatus
+          );
         } else {
           await recordPngSequence(svgs, canvas, model, data, init, common, setExportStatus);
         }
@@ -253,7 +293,21 @@ export function App() {
         setExporting(false);
       }
     },
-    [model, data, lr, paramSeed, paint, exportPlots]
+    [
+      model,
+      data,
+      lr,
+      paramSeed,
+      paint,
+      exportPlots,
+      recFps,
+      recScale,
+      recMaxSteps,
+      recDwellSec,
+      recKeepEvery,
+      recBitrateMbps,
+      recGifQuality,
+    ]
   );
 
   const beginExport = useCallback((kind: ExportKind) => {
@@ -264,11 +318,7 @@ export function App() {
     const kind = pendingExport;
     if (!kind) return;
     setPendingExport(null);
-    const extras =
-      kind === "webm" ? { fps: 30 }
-      : kind === "gif" ? { fps: 20, keepEvery: 2 }
-      : { fps: 30, keepEvery: 1 };
-    void runRecording(kind, extras);
+    void runRecording(kind);
   }, [pendingExport, runRecording]);
 
   const stopRecording = useCallback(() => {
@@ -293,6 +343,7 @@ export function App() {
             params={params}
             data={data}
             loss={curLoss}
+            testLoss={curTestLoss}
             step={stepN}
             view={view}
             showLossText={showLossText}
@@ -356,6 +407,15 @@ export function App() {
             <label>Points <span className="value">{nPoints}</span></label>
             <input type="range" min={20} max={300} step={10} value={nPoints} onChange={(e) => setNPoints(+e.target.value)} />
           </div>
+          <div className="row">
+            <label>
+              Test fold <span className="value">{Math.round(testRatio * 100)}%</span>
+              {testRatio > 0 && (
+                <span className="value">  ·  held out {data.test?.xs.length ?? 0} of {nPoints}</span>
+              )}
+            </label>
+            <input type="range" min={0} max={0.5} step={0.05} value={testRatio} onChange={(e) => setTestRatio(+e.target.value)} />
+          </div>
           <div className="btn-row">
             <button className="btn" onClick={newData}>new data</button>
           </div>
@@ -404,6 +464,58 @@ export function App() {
           <div className="btn-row">
             <button className="btn" onClick={exportPng} disabled={exporting}>PNG</button>
             <button className="btn" onClick={exportSvg} disabled={exporting}>SVG</button>
+          </div>
+
+          <div className="divider" />
+          <h3>Recording options</h3>
+          <div className="row">
+            <label>FPS <span className="value">{recFps}</span></label>
+            <input
+              type="range" min={5} max={60} step={1} value={recFps}
+              onChange={(e) => setRecFps(+e.target.value)} disabled={exporting}
+            />
+          </div>
+          <div className="row">
+            <label>Resolution <span className="value">{recScale}×</span></label>
+            <input
+              type="range" min={1} max={3} step={1} value={recScale}
+              onChange={(e) => setRecScale(+e.target.value)} disabled={exporting}
+            />
+          </div>
+          <div className="row">
+            <label>Max steps <span className="value">{recMaxSteps}</span></label>
+            <input
+              type="range" min={100} max={1500} step={50} value={recMaxSteps}
+              onChange={(e) => setRecMaxSteps(+e.target.value)} disabled={exporting}
+            />
+          </div>
+          <div className="row">
+            <label>Dwell (s) <span className="value">{recDwellSec.toFixed(1)}</span></label>
+            <input
+              type="range" min={0} max={3} step={0.1} value={recDwellSec}
+              onChange={(e) => setRecDwellSec(+e.target.value)} disabled={exporting}
+            />
+          </div>
+          <div className="row">
+            <label>Keep every <span className="value">{recKeepEvery === 1 ? "frame" : `${recKeepEvery} frames`}</span></label>
+            <input
+              type="range" min={1} max={5} step={1} value={recKeepEvery}
+              onChange={(e) => setRecKeepEvery(+e.target.value)} disabled={exporting}
+            />
+          </div>
+          <div className="row">
+            <label>WebM bitrate <span className="value">{recBitrateMbps} Mbps</span></label>
+            <input
+              type="range" min={1} max={12} step={1} value={recBitrateMbps}
+              onChange={(e) => setRecBitrateMbps(+e.target.value)} disabled={exporting}
+            />
+          </div>
+          <div className="row">
+            <label>GIF quality <span className="value">{recGifQuality} {recGifQuality <= 5 ? "(best)" : recGifQuality >= 20 ? "(fastest)" : ""}</span></label>
+            <input
+              type="range" min={1} max={30} step={1} value={recGifQuality}
+              onChange={(e) => setRecGifQuality(+e.target.value)} disabled={exporting}
+            />
           </div>
 
           {exporting ? (
@@ -462,6 +574,7 @@ export function App() {
               params={params}
               data={data}
               loss={curLoss}
+              testLoss={curTestLoss}
               step={stepN}
               view={view}
               showLossText={showLossText}
