@@ -4,7 +4,7 @@ import { LossCurve, type LossPoint } from "./plot/LossCurve";
 import { makePoly } from "./models/poly";
 import { makeMLP } from "./models/mlp";
 import type { Model, Params } from "./models/types";
-import { makeDataset, PRESET_LABELS, type PresetId } from "./data/presets";
+import { makeDataset, PRESETS, PRESETS_BY_CATEGORY, type PresetId } from "./data/presets";
 import { step as trainStep, loss as computeLoss } from "./training/loop";
 import { rasteriseSvgsStacked, serializeSvg, downloadBlob, canvasToBlob, nextFrame } from "./export/raster";
 import { recordWebm } from "./export/webm";
@@ -394,11 +394,38 @@ export function App() {
           <div className="row">
             <label>Preset</label>
             <select value={preset} onChange={(e) => setPreset(e.target.value as PresetId)}>
-              {(Object.keys(PRESET_LABELS) as PresetId[]).map((k) => (
-                <option key={k} value={k}>{PRESET_LABELS[k]}</option>
-              ))}
+              <optgroup label="Casos reales">
+                {PRESETS_BY_CATEGORY.real.map((k) => (
+                  <option key={k} value={k}>{PRESETS[k].label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Funciones abstractas">
+                {PRESETS_BY_CATEGORY.abstracto.map((k) => (
+                  <option key={k} value={k}>{PRESETS[k].label}</option>
+                ))}
+              </optgroup>
             </select>
           </div>
+          {(PRESETS[preset].description || PRESETS[preset].formula) && (
+            <div className="preset-card">
+              {PRESETS[preset].formula && (
+                <div className="preset-formula">{PRESETS[preset].formula}</div>
+              )}
+              {PRESETS[preset].description && (
+                <div className="preset-desc">{PRESETS[preset].description}</div>
+              )}
+              {(PRESETS[preset].xMeaning || PRESETS[preset].yMeaning) && (
+                <div className="preset-axes">
+                  {PRESETS[preset].xMeaning && (
+                    <span><b>x:</b> {PRESETS[preset].xMeaning}</span>
+                  )}
+                  {PRESETS[preset].yMeaning && (
+                    <span><b>y:</b> {PRESETS[preset].yMeaning}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div className="row">
             <label>Noise σ <span className="value">{noise.toFixed(2)}</span></label>
             <input type="range" min={0} max={0.5} step={0.01} value={noise} onChange={(e) => setNoise(+e.target.value)} />
