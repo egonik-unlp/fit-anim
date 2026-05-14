@@ -1,9 +1,29 @@
 import React, { useMemo } from "react";
-import type { Dataset } from "../data/presets";
+import type { Dataset, DisplayMeta } from "../data/presets";
 import type { Model, Params } from "../models/types";
 import { linearScale, niceTicks, fmt } from "./scales";
 
 export type ResidualView = "segments" | "histogram" | "strips";
+
+/** Format a real-world number with es-AR thousand separators and unit affixes. */
+function fmtReal(v: number, prefix?: string, suffix?: string): string {
+  let body: string;
+  const a = Math.abs(v);
+  if (!Number.isFinite(v)) body = String(v);
+  else if (a >= 1000) body = Math.round(v).toLocaleString("es-AR");
+  else if (a >= 10) body = v.toFixed(0);
+  else if (a >= 1) body = v.toFixed(1).replace(".", ",");
+  else if (a === 0) body = "0";
+  else body = v.toFixed(2).replace(".", ",");
+  return (prefix ?? "") + body + (suffix ?? "");
+}
+
+/** Format a tick value: through display.x|yToReal when present, else fall back to normalized fmt. */
+function fmtTick(t: number, display: DisplayMeta | undefined, axis: "x" | "y"): string {
+  if (!display) return fmt(t);
+  if (axis === "x") return fmtReal(display.xToReal(t), display.xPrefix, display.xUnit);
+  return fmtReal(display.yToReal(t), display.yPrefix, display.yUnit);
+}
 
 type Props = {
   model: Model;
@@ -32,8 +52,9 @@ export function Plot({ model, params, data, loss, testLoss, step, view, showLoss
   const equationVisible = isMlp ? showMlpDiagram : showPolyEquation;
   // The MLP diagram is taller than the polynomial equation, so the top margin grows when it's shown.
   const padTop = !equationVisible ? 32 : isMlp ? 170 : 78;
-  const padBottom = showErrorEquation ? 100 : 48;
-  const PAD = { top: padTop, right: 32, bottom: padBottom, left: 56 };
+  const padBottom = showErrorEquation ? 100 : data.display?.xLabel ? 64 : 48;
+  const padLeft = data.display ? 88 : 56;
+  const PAD = { top: padTop, right: 32, bottom: padBottom, left: padLeft };
 
   const histActive = view === "histogram";
   const plotRight = histActive ? W - PAD.right - HIST_W - HIST_GAP : W - PAD.right;
@@ -74,6 +95,7 @@ export function Plot({ model, params, data, loss, testLoss, step, view, showLoss
     >
       <style>{`
         .axis { stroke: #111; stroke-width: 1; fill: none; }
+        .axis-label { font: italic 12px "Iowan Old Style", Palatino, Georgia, serif; fill: #555; }
         .tick-label { font: 12px ui-sans-serif, system-ui, sans-serif; fill: #333; }
         .data-dot { fill: #b8b8b8; }
         .test-dot { fill: white; stroke: #1e6bb8; stroke-width: 1.2; }
@@ -113,15 +135,35 @@ export function Plot({ model, params, data, loss, testLoss, step, view, showLoss
           {xTicks.map((t, i) => (
             <g key={`xt${i}`}>
               <line className="axis" x1={x(t)} y1={H - PAD.bottom} x2={x(t)} y2={H - PAD.bottom + 4} />
-              <text className="tick-label" x={x(t)} y={H - PAD.bottom + 18} textAnchor="middle">{fmt(t)}</text>
+              <text className="tick-label" x={x(t)} y={H - PAD.bottom + 18} textAnchor="middle">
+                {fmtTick(t, data.display, "x")}
+              </text>
             </g>
           ))}
           {yTicks.map((t, i) => (
             <g key={`yt${i}`}>
               <line className="axis" x1={PAD.left - 4} y1={y(t)} x2={PAD.left} y2={y(t)} />
-              <text className="tick-label" x={PAD.left - 8} y={y(t) + 4} textAnchor="end">{fmt(t)}</text>
+              <text className="tick-label" x={PAD.left - 8} y={y(t) + 4} textAnchor="end">
+                {fmtTick(t, data.display, "y")}
+              </text>
             </g>
           ))}
+          {data.display?.xLabel && (
+            <text className="axis-label" x={(PAD.left + plotRight) / 2} y={H - 8} textAnchor="middle">
+              {data.display.xLabel}
+            </text>
+          )}
+          {data.display?.yLabel && (
+            <text
+              className="axis-label"
+              x={14}
+              y={(PAD.top + (H - PAD.bottom)) / 2}
+              transform={`rotate(-90 14 ${(PAD.top + (H - PAD.bottom)) / 2})`}
+              textAnchor="middle"
+            >
+              {data.display.yLabel}
+            </text>
+          )}
         </g>
       )}
 

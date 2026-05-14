@@ -1,28 +1,39 @@
 import { mulberry32, gaussian } from "../models/rng";
 
+/** Maps internal normalized x/y values ∈ [-1, 1] to real-world units for axis labels.
+ * Training stays in normalized space so polynomial / MLP fits don't depend on scale. */
+export type DisplayMeta = {
+  xToReal: (xNorm: number) => number;
+  yToReal: (yNorm: number) => number;
+  /** Suffix appended to formatted x-axis tick values (e.g. " km", " min", " °C"). */
+  xUnit?: string;
+  yUnit?: string;
+  /** Prefix prepended to formatted values (e.g. "$"). */
+  xPrefix?: string;
+  yPrefix?: string;
+  xLabel?: string;
+  yLabel?: string;
+};
+
 export type Dataset = {
-  /** training fold: x coordinates */
   xs: number[];
-  /** training fold: y coordinates */
   ys: number[];
-  /** optional held-out test fold (undefined when testRatio is 0) */
   test?: { xs: number[]; ys: number[] };
-  /** the noise-free truth, useful for plotting reference if we ever want it */
   truth: (x: number) => number;
   xMin: number;
   xMax: number;
   yMin: number;
   yMax: number;
+  /** optional display layer for showing real-world units on the axes */
+  display?: DisplayMeta;
 };
 
 export type PresetId =
-  // Abstract / mathematical
   | "line"
   | "parabola"
   | "cubic"
   | "sine"
   | "step"
-  // Casos reales (Argentina)
   | "taxi"
   | "proyectil"
   | "enfriamiento"
@@ -38,14 +49,12 @@ export type PresetMeta = {
   category: PresetCategory;
   /** the noise-free truth defined over x ∈ [-1, 1] */
   truth: (x: number) => number;
-  /** plain-text formula shown alongside the preset */
+  /** optional display mapping that turns normalized coords into real-world units */
+  display?: DisplayMeta;
+  /** plain-text formula shown alongside the preset (with real parameter values) */
   formula?: string;
-  /** longer Spanish description explaining the real-world meaning */
+  /** Spanish description explaining the real-world scenario and its parameters */
   description?: string;
-  /** what the normalized x-axis represents in the real-world reading */
-  xMeaning?: string;
-  /** what the normalized y-axis represents in the real-world reading */
-  yMeaning?: string;
 };
 
 export const PRESETS: Record<PresetId, PresetMeta> = {
@@ -87,87 +96,139 @@ export const PRESETS: Record<PresetId, PresetMeta> = {
   },
 
   // --- Casos reales (Argentina) ---
+  // x ∈ [-1, 1] → distancia 0..15 km
+  // y ∈ [-1, 1] → costo $1500..$7500
+  // costo = $1500 + $400/km · distancia
   taxi: {
     id: "taxi",
     label: "Viaje en taxi",
     category: "real",
-    truth: (x) => 0.3 + 0.5 * x,
-    formula: "costo = bajada_de_bandera + costo_por_km · distancia",
+    // truth_norm(x) = ((1500 + 400*dist) - 4500) / 3000 = (400*7.5*(x+1) - 3000)/3000 = x
+    truth: (x) => x,
+    display: {
+      xToReal: (x) => 7.5 * (x + 1),
+      yToReal: (y) => 4500 + 3000 * y,
+      xUnit: " km",
+      yPrefix: "$",
+      xLabel: "distancia",
+      yLabel: "costo del viaje",
+    },
+    formula: "costo = $1.500 + $400/km · distancia",
     description:
-      "El costo de un viaje en taxi crece linealmente con la distancia. La intersección con el eje y es la bajada de bandera; la pendiente es el costo por kilómetro.",
-    xMeaning: "distancia recorrida",
-    yMeaning: "costo del viaje",
+      "Un viaje en taxi tiene una bajada de bandera fija ($1.500) más un costo proporcional a la distancia ($400 por km). Probá polinomial grado 1: la ordenada al origen que aprende es la bajada de bandera, y la pendiente es el costo por km.",
   },
+
+  // x ∈ [-1, 1] → tiempo 0..2 s
+  // y ∈ [-1, 1] → altura 0..5 m
+  // altura(t) = 10·t − 5·t²  ⇒  truth_norm(x) = 1 − 2x²
   proyectil: {
     id: "proyectil",
     label: "Pelota lanzada al aire",
     category: "real",
-    // Opens downward, peak ~0.6 at x=0, zeros near x = ±0.93
-    truth: (x) => 0.6 - 0.7 * x * x,
-    formula: "altura(t) = v₀ · t − ½ · g · t²",
+    truth: (x) => 1 - 2 * x * x,
+    display: {
+      xToReal: (x) => x + 1,
+      yToReal: (y) => 2.5 + 2.5 * y,
+      xUnit: " s",
+      yUnit: " m",
+      xLabel: "tiempo",
+      yLabel: "altura",
+    },
+    formula: "altura(t) = 10·t − 5·t²   (v₀ = 10 m/s, g ≈ 10 m/s²)",
     description:
-      "Si tirás una pelota hacia arriba, sube, alcanza una altura máxima y vuelve a caer. La trayectoria en función del tiempo es una parábola hacia abajo.",
-    xMeaning: "tiempo desde el lanzamiento",
-    yMeaning: "altura de la pelota",
+      "Tirás una pelota hacia arriba a 10 m/s. Sube hasta 5 m al segundo 1 y vuelve al piso al segundo 2. Probá polinomial grado 2: la parábola se ajusta de forma exacta.",
   },
+
+  // x ∈ [-1, 1] → tiempo 0..15 min
+  // y ∈ [-1, 1] → temperatura 20..80 °C
+  // T(t) = 20 + 60·e^(−0.15·t)   ⇒  truth_norm(x) = 2·e^(−1.125·(x+1)) − 1
   enfriamiento: {
     id: "enfriamiento",
     label: "Enfriamiento del mate",
     category: "real",
-    // Exponential decay, monotonic decreasing, asymptote around -0.3
-    // At x=-1 (t=0): 0.7·1 + (-0.3) = 0.4
-    // At x=1 (t=2): 0.7·exp(-3) + (-0.3) ≈ -0.265
-    truth: (x) => 0.7 * Math.exp(-1.5 * (x + 1)) - 0.3,
-    formula: "T(t) = T_amb + (T₀ − T_amb) · e^(−k·t)",
+    truth: (x) => 2 * Math.exp(-1.125 * (x + 1)) - 1,
+    display: {
+      xToReal: (x) => 7.5 * (x + 1),
+      yToReal: (y) => 50 + 30 * y,
+      xUnit: " min",
+      yUnit: " °C",
+      xLabel: "tiempo",
+      yLabel: "temperatura",
+    },
+    formula: "T(t) = 20 + 60·e^(−0.15·t)",
     description:
-      "El mate se enfría hacia la temperatura ambiente: al principio cae rápido, después cada vez más lento. Es un decaimiento exponencial.",
-    xMeaning: "tiempo desde que se sirvió",
-    yMeaning: "temperatura del mate",
+      "Servís un mate a 80 °C en un ambiente a 20 °C. Al principio se enfría rápido, después cada vez más lento; a los 15 min está cerca de los 25 °C. Un polinomio bajo no captura bien la asíntota — probá MLP.",
   },
+
+  // x ∈ [-1, 1] → días 0..60
+  // y ∈ [-1, 1] → altura 0..100 cm
+  // h(t) = 100 / (1 + e^(−0.15·(t − 30)))   ⇒  truth_norm(x) = tanh(2.25·x)
   crecimiento: {
     id: "crecimiento",
     label: "Crecimiento de una planta",
     category: "real",
-    // Sigmoid centred at 0, range about [-0.4, 0.4]
-    truth: (x) => 0.8 / (1 + Math.exp(-3 * x)) - 0.4,
-    formula: "h(t) = L / (1 + e^(−k(t − t₀)))",
+    truth: (x) => Math.tanh(2.25 * x),
+    display: {
+      xToReal: (x) => 30 * (x + 1),
+      yToReal: (y) => 50 + 50 * y,
+      xUnit: " días",
+      yUnit: " cm",
+      xLabel: "tiempo desde el brote",
+      yLabel: "altura",
+    },
+    formula: "h(t) = 100 / (1 + e^(−0.15·(t − 30)))",
     description:
-      "Una planta arranca lento, crece rápido en el medio de su ciclo y se estanca al acercarse a su tamaño máximo. Es una curva sigmoidea (logística).",
-    xMeaning: "tiempo desde que brotó",
-    yMeaning: "altura de la planta",
+      "Una planta crece de 0 a 100 cm a lo largo de 60 días, pero no de manera uniforme: arranca lento, acelera entre los días 20–40, y se estanca al llegar a su tamaño máximo. La curva es una sigmoide. Probá MLP.",
   },
+
+  // x ∈ [-1, 1] → meses 0..12
+  // y ∈ [-1, 1] → precio $800..$2000
+  // precio(t) = $1000 · (1,05)^t   ⇒  precio en [$1000, ~$1796]
   inflacion: {
     id: "inflacion",
     label: "Inflación acumulada",
     category: "real",
-    // Map x ∈ [-1,1] to t ∈ [0, 12] months, r = 5% / month compounded.
-    // price(t) = 1.05^t ranges in [1, ~1.796]. Center+scale to [-0.8, 0.8].
-    truth: (x) => (Math.pow(1.05, (x + 1) * 6) - 1.4) / 0.5,
-    formula: "precio(t) = precio₀ · (1 + r)^t",
+    truth: (x) => (1000 * Math.pow(1.05, 6 * (x + 1)) - 1400) / 600,
+    display: {
+      xToReal: (x) => 6 * (x + 1),
+      yToReal: (y) => 1400 + 600 * y,
+      xUnit: " meses",
+      yPrefix: "$",
+      xLabel: "tiempo",
+      yLabel: "precio acumulado",
+    },
+    formula: "precio(t) = $1.000 · (1,05)^t",
     description:
-      "Con una tasa de inflación mensual constante, el precio acumulado crece exponencialmente (interés compuesto). Una tasa del 5% mensual implica casi un 80% anual.",
-    xMeaning: "meses transcurridos",
-    yMeaning: "precio acumulado",
+      "Un producto que vale $1.000 hoy, con una inflación mensual del 5% (interés compuesto), llega a casi $1.800 a los 12 meses — un acumulado de ~80% anual. No es lineal: cada mes el aumento absoluto es más grande. Probá polinomial grado 3 o MLP.",
   },
+
+  // x ∈ [-1, 1] → hora del día 0..24
+  // y ∈ [-1, 1] → tarifa $300..$500
+  // tarifa = $500 entre 0–6 h, $300 entre 6–24 h
+  // step at x = -0.5 (= 6 h)
   tarifa_horario: {
     id: "tarifa_horario",
-    label: "Tarifa día/noche",
+    label: "Tarifa estacionamiento (día/noche)",
     category: "real",
-    truth: (x) => (x < 0 ? -0.4 : 0.5),
-    formula: "tarifa = T_día si hora < 22, T_noche si hora ≥ 22",
+    truth: (x) => (x < -0.5 ? 1 : -1),
+    display: {
+      xToReal: (x) => 12 * (x + 1),
+      yToReal: (y) => 400 + 100 * y,
+      xUnit: " h",
+      yPrefix: "$",
+      xLabel: "hora del día",
+      yLabel: "tarifa por hora",
+    },
+    formula: "tarifa = $500 entre 0–6 h (nocturna), $300 entre 6–24 h (diurna)",
     description:
-      "Algunos servicios (estacionamiento, ciertos transportes) cambian de tarifa según el horario. La función pega un salto al pasar de la franja diurna a la nocturna.",
-    xMeaning: "hora del día",
-    yMeaning: "tarifa aplicada",
+      "Un estacionamiento cobra una tarifa nocturna más alta entre la medianoche y las 6 de la mañana ($500/h), y diurna durante el resto del día ($300/h). La función pega un salto a las 6 h. Los polinomios no pueden representar saltos bruscos — probá MLP.",
   },
 };
 
-/** Backwards-compatible label lookup, in the same order as PRESETS. */
 export const PRESET_LABELS: Record<PresetId, string> = Object.fromEntries(
   (Object.keys(PRESETS) as PresetId[]).map((k) => [k, PRESETS[k].label])
 ) as Record<PresetId, string>;
 
-/** Ordered list of preset ids, grouped by category, useful for rendering optgroups. */
 export const PRESETS_BY_CATEGORY: Record<PresetCategory, PresetId[]> = {
   abstracto: (Object.keys(PRESETS) as PresetId[]).filter((k) => PRESETS[k].category === "abstracto"),
   real: (Object.keys(PRESETS) as PresetId[]).filter((k) => PRESETS[k].category === "real"),
@@ -181,7 +242,6 @@ export function makeDataset(
     seed?: number;
     xMin?: number;
     xMax?: number;
-    /** fraction of points held out as a test fold (0..0.5). default 0. */
     testRatio?: number;
   } = {}
 ): Dataset {
@@ -192,9 +252,9 @@ export function makeDataset(
   const xMax = opts.xMax ?? 1;
   const testRatio = Math.min(0.5, Math.max(0, opts.testRatio ?? 0));
   const rand = mulberry32(seed);
-  const truth = PRESETS[preset].truth;
+  const meta = PRESETS[preset];
+  const truth = meta.truth;
 
-  // Generate all points first; bounding box covers both folds.
   const allX = new Array<number>(n);
   const allY = new Array<number>(n);
   for (let i = 0; i < n; i++) {
@@ -203,7 +263,6 @@ export function makeDataset(
     allY[i] = truth(x) + gaussian(rand) * noise;
   }
 
-  // y range with margin, covering all points (train + test).
   let yMin = Infinity, yMax = -Infinity;
   for (const y of allY) {
     if (y < yMin) yMin = y;
@@ -213,12 +272,18 @@ export function makeDataset(
   yMin -= pad;
   yMax += pad;
 
-  // Deterministic shuffle for the train/test partition, seeded from the same seed
-  // (so split is stable across rerenders for given (seed, testRatio), but a
-  // "new data" click reshuffles both samples and the partition).
+  const baseDs: Omit<Dataset, "xs" | "ys" | "test"> = {
+    truth,
+    xMin,
+    xMax,
+    yMin,
+    yMax,
+    display: meta.display,
+  };
+
   const nTest = Math.floor(n * testRatio);
   if (nTest === 0) {
-    return { xs: allX, ys: allY, truth, xMin, xMax, yMin, yMax };
+    return { ...baseDs, xs: allX, ys: allY };
   }
 
   const splitRand = mulberry32((seed * 2654435761) >>> 0);
@@ -233,19 +298,13 @@ export function makeDataset(
   const testIdx = order.slice(n - nTest);
   const trainIdx = order.slice(0, n - nTest);
 
-  const xs = trainIdx.map((i) => allX[i]!);
-  const ys = trainIdx.map((i) => allY[i]!);
-  const testXs = testIdx.map((i) => allX[i]!);
-  const testYs = testIdx.map((i) => allY[i]!);
-
   return {
-    xs,
-    ys,
-    test: { xs: testXs, ys: testYs },
-    truth,
-    xMin,
-    xMax,
-    yMin,
-    yMax,
+    ...baseDs,
+    xs: trainIdx.map((i) => allX[i]!),
+    ys: trainIdx.map((i) => allY[i]!),
+    test: {
+      xs: testIdx.map((i) => allX[i]!),
+      ys: testIdx.map((i) => allY[i]!),
+    },
   };
 }

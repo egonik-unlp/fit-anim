@@ -414,13 +414,13 @@ export function App() {
               {PRESETS[preset].description && (
                 <div className="preset-desc">{PRESETS[preset].description}</div>
               )}
-              {(PRESETS[preset].xMeaning || PRESETS[preset].yMeaning) && (
+              {PRESETS[preset].display && (
                 <div className="preset-axes">
-                  {PRESETS[preset].xMeaning && (
-                    <span><b>x:</b> {PRESETS[preset].xMeaning}</span>
+                  {PRESETS[preset].display!.xLabel && (
+                    <span><b>x:</b> {PRESETS[preset].display!.xLabel}</span>
                   )}
-                  {PRESETS[preset].yMeaning && (
-                    <span><b>y:</b> {PRESETS[preset].yMeaning}</span>
+                  {PRESETS[preset].display!.yLabel && (
+                    <span><b>y:</b> {PRESETS[preset].display!.yLabel}</span>
                   )}
                 </div>
               )}
