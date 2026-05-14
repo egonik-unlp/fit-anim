@@ -124,7 +124,7 @@ export function Plot({ model, params, data, loss, testLoss, step, view, showLoss
         .diag-tanh { font: italic 11px "Iowan Old Style", Palatino, Georgia, serif; fill: #444; }
       `}</style>
 
-      {equationVisible && <EquationOverlay model={model} params={params} />}
+      {equationVisible && <EquationOverlay model={model} params={params} display={data.display} />}
       {showErrorEquation && <ErrorEquation loss={loss} n={data.xs.length} cx={W / 2} cy={H - 32} />}
 
       {/* axes */}
@@ -292,15 +292,56 @@ function ErrorEquation({ loss, n, cx, cy }: { loss: number; n: number; cx: numbe
 }
 
 // --- live equation overlay ---
-function EquationOverlay({ model, params }: { model: Model; params: Params }) {
+function EquationOverlay({
+  model,
+  params,
+  display,
+}: {
+  model: Model;
+  params: Params;
+  display?: DisplayMeta;
+}) {
   const isPoly = model.id.startsWith("poly-");
   const cx = W / 2;
   if (isPoly) {
-    return <PolyEquation params={params} cx={cx} cy={44} />;
+    return <PolyEquation params={params} cx={cx} cy={44} display={display} />;
   }
   // MLP: extract hidden width from the model id ("mlp-16" → 16) and draw the diagram.
   const H_units = Number.parseInt(model.id.split("-")[1] ?? "0", 10) || 0;
   return <MlpDiagram params={params} hidden={H_units} cx={cx} cy={86} />;
+}
+
+/** Sample an assumed-affine function f at 0 and 1 to recover (offset, scale). */
+function affineParams(f: (t: number) => number): { offset: number; scale: number } {
+  const offset = f(0);
+  const scale = f(1) - offset;
+  return { offset, scale };
+}
+
+/** Transform polynomial coefficients from normalized x/y to real-units space.
+ * Given f_norm(x_norm) = Σ a_k · x_norm^k with x_real = X0 + Xs·x_norm and
+ * y_real = Y0 + Ys·y_norm, returns [b_0, …, b_deg] so y_real = Σ b_j · x_real^j. */
+function polyNormToReal(coefsNorm: number[], display: DisplayMeta): number[] {
+  const { offset: X0, scale: Xs } = affineParams(display.xToReal);
+  const { offset: Y0, scale: Ys } = affineParams(display.yToReal);
+  const deg = coefsNorm.length - 1;
+  const out = new Array<number>(deg + 1).fill(0);
+  const C: number[][] = [];
+  for (let i = 0; i <= deg; i++) {
+    const row = new Array<number>(deg + 1).fill(0);
+    row[0] = 1;
+    for (let j = 1; j <= i; j++) row[j] = (C[i - 1]?.[j - 1] ?? 0) + (C[i - 1]?.[j] ?? 0);
+    C.push(row);
+  }
+  for (let k = 0; k <= deg; k++) {
+    const aK = coefsNorm[k]!;
+    const invXs = Math.pow(1 / Xs, k);
+    for (let j = 0; j <= k; j++) {
+      out[j]! += Ys * aK * C[k]![j]! * Math.pow(-X0, k - j) * invXs;
+    }
+  }
+  out[0]! += Y0;
+  return out;
 }
 
 function fmtCoef(v: number): string {
@@ -310,23 +351,45 @@ function fmtCoef(v: number): string {
   return a.toFixed(2);
 }
 
-function PolyEquation({ params, cx, cy }: { params: Params; cx: number; cy: number }) {
-  // Build: f(x) = a0 [± a1 x] [± a2 x²] ...
+function PolyEquation({
+  params,
+  cx,
+  cy,
+  display,
+}: {
+  params: Params;
+  cx: number;
+  cy: number;
+  display?: DisplayMeta;
+}) {
+  // In display mode, transform the normalized coefficients into real-units coefficients
+  // so the equation reads like "costo(x) = $1.500 + 400 x" instead of the normalized form.
+  const realMode = !!display;
+  const coefs: number[] = realMode
+    ? polyNormToReal(Array.from(params), display!)
+    : Array.from(params);
+  const lhsName = display?.yLabel ?? "f";
+  const fmtCoefDisplay = (k: number, v: number) => {
+    if (realMode) {
+      if (k === 0) return fmtReal(v, display!.yPrefix, display!.yUnit);
+      return fmtReal(v);
+    }
+    return fmtCoef(v);
+  };
   const parts: React.ReactNode[] = [];
-  // LHS
-  parts.push(<tspan key="lhs1">f(</tspan>);
+  parts.push(<tspan key="lhs1">{lhsName}(</tspan>);
   parts.push(<tspan key="lhs2" className="var">x</tspan>);
   parts.push(<tspan key="lhs3">{") = "}</tspan>);
 
-  for (let k = 0; k < params.length; k++) {
-    const a = params[k]!;
+  for (let k = 0; k < coefs.length; k++) {
+    const a = coefs[k]!;
     const negative = a < 0;
     if (k === 0) {
       if (negative) parts.push(<tspan key={`s${k}`} className="op">{"−"}</tspan>);
     } else {
       parts.push(<tspan key={`s${k}`} className="op">{negative ? " − " : " + "}</tspan>);
     }
-    parts.push(<tspan key={`m${k}`} className="num">{fmtCoef(a)}</tspan>);
+    parts.push(<tspan key={`m${k}`} className="num">{fmtCoefDisplay(k, Math.abs(a))}</tspan>);
     if (k >= 1) {
       parts.push(<tspan key={`x${k}`}>{" "}</tspan>);
       parts.push(<tspan key={`xx${k}`} className="var">x</tspan>);
